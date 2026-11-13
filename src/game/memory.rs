@@ -1,6 +1,8 @@
 //! マップ記憶（階ごと）。
 
-use crate::dungeon::{Floor, Pos, Tile, shortest_path};
+use std::collections::VecDeque;
+
+use crate::dungeon::{Floor, Pos, Tile};
 
 use super::types::Dir;
 
@@ -90,14 +92,51 @@ impl FloorMemory {
         out
     }
 
+    fn known_walkable(&self, p: Pos) -> bool {
+        self.known(p).is_some_and(Tile::is_walkable)
+    }
+
     /// 既知マップだけを使った最短経路（向きのリスト）。経路がなければ `None`。
-    /// 未知セルは壁として扱い、既存の `shortest_path` を使う。
-    pub fn path(&self, floor: &Floor, from: Pos, to: Pos) -> Option<Vec<Dir>> {
-        let mut masked = floor.clone();
-        for (t, k) in masked.tiles.iter_mut().zip(&self.known) {
-            *t = k.unwrap_or(Tile::Wall);
+    /// 未知セルは壁として扱う。フロアを複製せず、記憶の上で直接 BFS する。
+    pub fn path(&self, from: Pos, to: Pos) -> Option<Vec<Dir>> {
+        if !self.known_walkable(from) || !self.known_walkable(to) {
+            return None;
         }
-        let cells = shortest_path(&masked, from, to)?;
-        Some(cells.windows(2).map(|w| Dir::between(w[0], w[1]).expect("adjacent")).collect())
+        let n = self.known.len();
+        let (start, goal) = (self.index(from), self.index(to));
+        // prev[i] = 直前セルの添字と、そこからの向き。
+        let mut prev: Vec<Option<(usize, Dir)>> = vec![None; n];
+        let mut seen = vec![false; n];
+        seen[start] = true;
+        let mut queue = VecDeque::from([from]);
+        while let Some(cur) = queue.pop_front() {
+            let ci = self.index(cur);
+            if ci == goal {
+                break;
+            }
+            for d in Dir::ALL {
+                let next = d.step(cur);
+                if !self.known_walkable(next) {
+                    continue;
+                }
+                let ni = self.index(next);
+                if !seen[ni] {
+                    seen[ni] = true;
+                    prev[ni] = Some((ci, d));
+                    queue.push_back(next);
+                }
+            }
+        }
+        if !seen[goal] {
+            return None;
+        }
+        let mut dirs = Vec::new();
+        let mut i = goal;
+        while let Some((p, d)) = prev[i] {
+            dirs.push(d);
+            i = p;
+        }
+        dirs.reverse();
+        Some(dirs)
     }
 }

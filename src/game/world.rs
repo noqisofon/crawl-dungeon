@@ -321,7 +321,7 @@ impl World {
     }
 
     pub fn path_to(&self, to: Pos) -> Option<Vec<Dir>> {
-        self.mem().path(self.floor(), self.party.pos, to)
+        self.mem().path(self.party.pos, to)
     }
 
     /// 方向リストに沿って向き直りと移動を繰り返す。
