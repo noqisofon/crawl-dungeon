@@ -7,6 +7,31 @@ edition = "2024"
 rand = "0.9"
 rand_chacha = "0.9"
 steel-core = "0.8.3"
+# リプレイビューア用。feature `viewer` を付けたときだけビルドされる。
+# バージョンは glyphfall (0.15.x) に合わせる。必要な機能だけ有効にして依存を絞る。
+bevy = { version = "0.15.3", default-features = false, features = [
+    "bevy_asset",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_render",
+    "bevy_sprite",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_window",
+    "bevy_winit",
+    "default_font",
+    "multi_threaded",
+    "x11",
+], optional = true }
+
+[features]
+default = []
+viewer = ["dep:bevy"]
+
+[[bin]]
+name = "replay"
+path = "src/bin/replay.rs"
+required-features = ["viewer"]
 
 # steel はデバッグビルドだと極端に遅いので、依存クレートだけ最適化する。
 [profile.dev.package."*"]

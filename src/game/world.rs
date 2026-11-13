@@ -151,6 +151,7 @@ impl World {
             mp_used,
             members_lost,
             healed,
+            party: self.party.snapshot(),
         });
         if result == BattleEnd::Wiped {
             self.halt(Outcome::PartyWiped);
@@ -223,7 +224,7 @@ impl World {
             healed += hp;
             m.mp = (m.mp + m.max_mp * REST_HEAL_PERCENT / 100).min(m.max_mp);
         }
-        self.events.push(GameEvent::Rested { turn: self.party.turn, healed });
+        self.events.push(GameEvent::Rested { turn: self.party.turn, healed, party: self.party.snapshot() });
         let pct = self.encounter_percent(&REST_ENCOUNTER_PERCENT);
         Ok(match self.maybe_battle(pct) {
             Some(BattleEnd::Won) => RestResult::BattleWon,

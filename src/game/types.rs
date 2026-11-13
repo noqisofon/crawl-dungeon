@@ -2,6 +2,7 @@
 
 use crate::dungeon::{ItemKind, Pos};
 
+use super::event::MemberSnapshot;
 use super::consts::{INITIAL_PARTY, class_stats};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -148,6 +149,11 @@ impl Party {
         let max: i32 = self.members.iter().filter(|m| m.is_alive()).map(|m| m.max_hp).sum();
         let cur: i32 = self.members.iter().filter(|m| m.is_alive()).map(|m| m.hp).sum();
         if max == 0 { 0.0 } else { cur as f64 / max as f64 }
+    }
+
+    /// 全メンバーの現在の HP/MP。
+    pub fn snapshot(&self) -> Vec<MemberSnapshot> {
+        self.members.iter().map(|m| MemberSnapshot { hp: m.hp, mp: m.mp }).collect()
     }
 
     pub fn has_item(&self, kind: ItemKind) -> bool {

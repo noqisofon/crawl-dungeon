@@ -8,7 +8,7 @@ mod script;
 mod types;
 mod world;
 
-pub use event::{BattleEnd, ExitKind, GameEvent, Outcome, RunResult};
+pub use event::{BattleEnd, ExitKind, GameEvent, MemberSnapshot, Outcome, RunResult};
 pub use memory::FloorMemory;
 pub use script::{RunConfig, run_script, run_script_with};
 pub use types::{Class, Dir, Member, Party};

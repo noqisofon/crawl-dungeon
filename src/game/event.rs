@@ -11,6 +11,14 @@ pub enum BattleEnd {
     Wiped,
 }
 
+/// ある時点のメンバーの HP/MP。`Party::members` と同じ並び（倒れたメンバーも含む）。
+/// 初期状態は `INITIAL_PARTY` と `class_stats` から復元できる。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemberSnapshot {
+    pub hp: i32,
+    pub mp: i32,
+}
+
 /// 各イベントの `turn` は、その行動が完了した後のターン数。
 #[derive(Clone, Debug, PartialEq)]
 pub enum GameEvent {
@@ -32,9 +40,11 @@ pub enum GameEvent {
         members_lost: usize,
         /// 戦闘後の僧侶の回復量の合計。
         healed: i32,
+        /// 戦闘（と戦闘後の回復）の直後の全メンバー。
+        party: Vec<MemberSnapshot>,
     },
-    /// `healed` は回復したHPの合計。
-    Rested { turn: u32, healed: i32 },
+    /// `healed` は回復したHPの合計。`party` は野営の直後の全メンバー。
+    Rested { turn: u32, healed: i32, party: Vec<MemberSnapshot> },
     Descended { turn: u32, from: usize, to: usize },
     Ascended { turn: u32, from: usize, to: usize },
     PickedUp { turn: u32, floor: usize, pos: Pos, item: ItemKind },
