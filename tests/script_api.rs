@@ -497,3 +497,18 @@ fn thieves_help_fleeing() {
     assert!(FLEE_BASE_PERCENT + FLEE_THIEF_BONUS_PERCENT <= FLEE_MAX_PERCENT);
     assert!(FLEE_THIEF_BONUS_PERCENT > 0);
 }
+
+#[test]
+fn huge_coordinates_are_not_truncated() {
+    let d = dungeon();
+    // 4294967296 = 2^32。`as i32` だと 0 に丸められてしまう。
+    let r = run(
+        &d,
+        "(assert! (equal? (known-tile 4294967296 4294967296) 'unknown))
+         (assert! (equal? (visited? 4294967296 4294967296) #f))
+         (assert! (equal? (path-to 4294967296 4294967296) #f))
+         (assert! (equal? (known-tile -5 -5) 'unknown))
+         (exit-dungeon)",
+    );
+    assert_eq!(r.outcome, Outcome::Exited(ExitKind::NoBook), "{r:?}");
+}

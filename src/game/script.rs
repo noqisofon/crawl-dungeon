@@ -52,6 +52,11 @@ fn tile_sym(t: Tile) -> SteelVal {
     })
 }
 
+/// スクリプトから来た座標を `Pos` にする。`i32` に収まらなければ `None`（丸めない）。
+fn to_pos(x: isize, y: isize) -> Option<Pos> {
+    Some(Pos::new(i32::try_from(x).ok()?, i32::try_from(y).ok()?))
+}
+
 fn abort(msg: &str) -> SteelErr {
     SteelErr::new(ErrorKind::Generic, msg.to_string())
 }
@@ -158,7 +163,7 @@ fn register(e: &mut Engine, w: &Shared) {
     let s = w.clone();
     e.register_fn("known-tile", move |x: isize, y: isize| -> Val {
         with(&s, |w| {
-            Ok(match w.known_tile(Pos::new(x as i32, y as i32)) {
+            Ok(match to_pos(x, y).and_then(|p| w.known_tile(p)) {
                 Some(t) => tile_sym(t),
                 None => sym("unknown"),
             })
@@ -166,7 +171,7 @@ fn register(e: &mut Engine, w: &Shared) {
     });
     let s = w.clone();
     e.register_fn("visited?", move |x: isize, y: isize| -> Val {
-        with(&s, |w| Ok(SteelVal::BoolV(w.visited(Pos::new(x as i32, y as i32)))))
+        with(&s, |w| Ok(SteelVal::BoolV(to_pos(x, y).is_some_and(|p| w.visited(p)))))
     });
     let s = w.clone();
     e.register_fn("frontier", move || -> Val {
@@ -175,7 +180,7 @@ fn register(e: &mut Engine, w: &Shared) {
     let s = w.clone();
     e.register_fn("path-to", move |x: isize, y: isize| -> Val {
         with(&s, |w| {
-            Ok(match w.path_to(Pos::new(x as i32, y as i32)) {
+            Ok(match to_pos(x, y).and_then(|p| w.path_to(p)) {
                 Some(path) => SteelVal::ListV(path.into_iter().map(|d| sym(d.symbol())).collect::<Vec<_>>().into()),
                 None => SteelVal::BoolV(false),
             })

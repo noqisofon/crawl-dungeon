@@ -134,6 +134,9 @@ impl Party {
     }
 
     /// 全員の現在HP合計 / 最大HP合計。
+    ///
+    /// 注意: 倒れたメンバー（復活しない）の最大HPも分母に入るので、
+    /// 誰かが倒れると、休んでも 1.0 には戻らない。
     pub fn hp_ratio(&self) -> f64 {
         let max: i32 = self.members.iter().map(|m| m.max_hp).sum();
         let cur: i32 = self.members.iter().map(|m| m.hp).sum();
