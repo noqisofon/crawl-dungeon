@@ -6,3 +6,8 @@ edition = "2024"
 [dependencies]
 rand = "0.9"
 rand_chacha = "0.9"
+steel-core = "0.8.3"
+
+# steel はデバッグビルドだと極端に遅いので、依存クレートだけ最適化する。
+[profile.dev.package."*"]
+opt-level = 3
