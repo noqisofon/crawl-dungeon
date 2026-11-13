@@ -117,9 +117,34 @@ fn doors_sit_in_room_walls() {
                 });
                 assert!(near_room && !f.rooms.iter().any(|r| r.contains(p)), "seed {seed} {p:?}");
             }
+            for r in &f.rooms {
+                let mut ring = Vec::new();
+                for x in r.x..r.x + r.w {
+                    ring.push(Pos::new(x, r.y - 1));
+                    ring.push(Pos::new(x, r.y + r.h));
+                }
+                for y in r.y..r.y + r.h {
+                    ring.push(Pos::new(r.x - 1, y));
+                    ring.push(Pos::new(r.x + r.w, y));
+                }
+                assert!(
+                    ring.iter().all(|&p| matches!(f.tile(p), Some(Tile::Wall | Tile::Door))),
+                    "seed {seed}: room {r:?} has an un-doored opening in its wall"
+                );
+                assert!(
+                    ring.iter().any(|&p| f.tile(p) == Some(Tile::Door)),
+                    "seed {seed}: room {r:?} has no door"
+                );
+            }
             assert!(f.tiles.contains(&Tile::Door), "seed {seed}: no doors");
         }
     }
+}
+
+#[test]
+#[should_panic(expected = "forced_up out of interior bounds")]
+fn generate_floor_rejects_border_forced_up() {
+    generate_floor(0, 1, Some(Pos::new(0, 0)));
 }
 
 #[test]

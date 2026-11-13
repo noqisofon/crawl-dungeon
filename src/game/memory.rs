@@ -45,8 +45,8 @@ impl FloorMemory {
 
     /// `pos` に着いたときの記憶更新。
     /// - 現在地を既知・訪問済みにする
-    /// - 4方向に、壁に当たる（壁自身は既知にする）まで既知にする
-    /// - 部屋の中なら、部屋全体と外周の壁を既知にする
+    /// - 4方向に、壁または扉に当たる（当たったセル自身は既知にする）まで既知にする
+    /// - 部屋の中なら、部屋全体と外周の壁・扉を既知にする
     pub fn arrive(&mut self, floor: &Floor, pos: Pos) {
         self.learn(floor, pos);
         let i = self.index(pos);
@@ -55,7 +55,7 @@ impl FloorMemory {
             let mut p = d.step(pos);
             while floor.in_bounds(p) {
                 self.learn(floor, p);
-                if floor.tile(p) == Some(Tile::Wall) {
+                if matches!(floor.tile(p), Some(Tile::Wall | Tile::Door)) {
                     break;
                 }
                 p = d.step(p);

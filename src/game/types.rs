@@ -143,6 +143,13 @@ impl Party {
         if max == 0 { 0.0 } else { cur as f64 / max as f64 }
     }
 
+    /// 生存メンバーのみの現在HP合計 / 最大HP合計。全滅時は 0.0。
+    pub fn alive_hp_ratio(&self) -> f64 {
+        let max: i32 = self.members.iter().filter(|m| m.is_alive()).map(|m| m.max_hp).sum();
+        let cur: i32 = self.members.iter().filter(|m| m.is_alive()).map(|m| m.hp).sum();
+        if max == 0 { 0.0 } else { cur as f64 / max as f64 }
+    }
+
     pub fn has_item(&self, kind: ItemKind) -> bool {
         self.items.contains(&kind)
     }

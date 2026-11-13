@@ -25,15 +25,21 @@ pub struct RunConfig {
     /// 戦闘の乱数の種。ダンジョンのシードとは独立。
     pub game_seed: u64,
     pub turn_limit: u32,
+    pub time_limit: std::time::Duration,
 }
 
 impl Default for RunConfig {
     fn default() -> Self {
-        Self { game_seed: 0, turn_limit: DEFAULT_TURN_LIMIT }
+        Self { game_seed: 0, turn_limit: DEFAULT_TURN_LIMIT, time_limit: SCRIPT_TIME_LIMIT }
     }
 }
 
-type Shared = Arc<Mutex<World>>;
+struct HostCtx {
+    world: Mutex<World>,
+    interrupt: Box<dyn Fn() + Send + Sync>,
+}
+
+type Shared = Arc<HostCtx>;
 type Val = Result<SteelVal, SteelErr>;
 
 fn sym(s: &str) -> SteelVal {
@@ -63,10 +69,13 @@ fn abort(msg: &str) -> SteelErr {
     SteelErr::new(ErrorKind::Generic, msg.to_string())
 }
 
-/// 終了済みチェック付きで `World` を使う。
-fn with<R>(w: &Shared, f: impl FnOnce(&mut World) -> Result<R, super::world::Halt>) -> Result<R, SteelErr> {
-    let mut w = w.lock().expect("world lock");
-    w.guard().and_then(|_| f(&mut w)).map_err(|_| abort("game halted"))
+/// 終了済みチェック付きで `World` を使う。中断時は VM にも割り込みをかける。
+fn with<R>(ctx: &Shared, f: impl FnOnce(&mut World) -> Result<R, super::world::Halt>) -> Result<R, SteelErr> {
+    let mut w = ctx.world.lock().expect("world lock");
+    w.guard().and_then(|_| f(&mut w)).map_err(|_| {
+        (ctx.interrupt)();
+        abort("game halted")
+    })
 }
 
 fn register(e: &mut Engine, w: &Shared) {
@@ -78,6 +87,7 @@ fn register(e: &mut Engine, w: &Shared) {
                 MoveResult::Moved => "moved",
                 MoveResult::Blocked => "blocked",
                 MoveResult::BattleWon => "battle-won",
+                MoveResult::BattleFled => "battle-fled",
                 MoveResult::PartyWiped => "party-wiped",
             })
         })
@@ -92,6 +102,7 @@ fn register(e: &mut Engine, w: &Shared) {
             sym(match r {
                 RestResult::Rested => "rested",
                 RestResult::BattleWon => "battle-won",
+                RestResult::BattleFled => "battle-fled",
                 RestResult::PartyWiped => "party-wiped",
             })
         })
@@ -138,6 +149,10 @@ fn register(e: &mut Engine, w: &Shared) {
     let s = w.clone();
     e.register_fn("party-hp-ratio", move || -> Val { with(&s, |w| Ok(SteelVal::NumV(w.party.hp_ratio()))) });
     let s = w.clone();
+    e.register_fn("party-alive-hp-ratio", move || -> Val {
+        with(&s, |w| Ok(SteelVal::NumV(w.party.alive_hp_ratio())))
+    });
+    let s = w.clone();
     e.register_fn("alive-count", move || -> Val {
         with(&s, |w| Ok(SteelVal::IntV(w.party.alive_count() as isize)))
     });
@@ -149,6 +164,33 @@ fn register(e: &mut Engine, w: &Shared) {
                 .ok()
                 .and_then(|i| w.party.members.get(i))
                 .map_or(SteelVal::BoolV(false), |m| SteelVal::IntV(m.hp as isize)))
+        })
+    });
+    let s = w.clone();
+    e.register_fn("member-max-hp", move |i: isize| -> Val {
+        with(&s, |w| {
+            Ok(usize::try_from(i)
+                .ok()
+                .and_then(|i| w.party.members.get(i))
+                .map_or(SteelVal::BoolV(false), |m| SteelVal::IntV(m.max_hp as isize)))
+        })
+    });
+    let s = w.clone();
+    e.register_fn("member-mp", move |i: isize| -> Val {
+        with(&s, |w| {
+            Ok(usize::try_from(i)
+                .ok()
+                .and_then(|i| w.party.members.get(i))
+                .map_or(SteelVal::BoolV(false), |m| SteelVal::IntV(m.mp as isize)))
+        })
+    });
+    let s = w.clone();
+    e.register_fn("member-max-mp", move |i: isize| -> Val {
+        with(&s, |w| {
+            Ok(usize::try_from(i)
+                .ok()
+                .and_then(|i| w.party.members.get(i))
+                .map_or(SteelVal::BoolV(false), |m| SteelVal::IntV(m.max_mp as isize)))
         })
     });
     let s = w.clone();
@@ -172,6 +214,23 @@ fn register(e: &mut Engine, w: &Shared) {
         })
     });
     let s = w.clone();
+    e.register_fn("known-item-at", move |x: isize, y: isize| -> Val {
+        with(&s, |w| {
+            Ok(match to_pos(x, y).and_then(|p| w.known_item_at(p)) {
+                Some(ItemKind::MagicBook) => sym("magic-book"),
+                None => SteelVal::BoolV(false),
+            })
+        })
+    });
+    let s = w.clone();
+    e.register_fn("known-items", move || -> Val {
+        with(&s, |w| {
+            Ok(SteelVal::ListV(
+                w.known_items().into_iter().map(|i| pos_val(i.pos)).collect::<Vec<_>>().into(),
+            ))
+        })
+    });
+    let s = w.clone();
     e.register_fn("visited?", move |x: isize, y: isize| -> Val {
         with(&s, |w| Ok(SteelVal::BoolV(to_pos(x, y).is_some_and(|p| w.visited(p)))))
     });
@@ -190,6 +249,11 @@ fn register(e: &mut Engine, w: &Shared) {
     });
     let s = w.clone();
     e.register_fn("follow-path", move |path: SteelVal| -> Val {
+        let mut w = s.world.lock().expect("world lock");
+        if w.guard().is_err() {
+            (s.interrupt)();
+            return Err(abort("game halted"));
+        }
         let SteelVal::ListV(list) = path else { return Err(abort("follow-path: expected a list of directions")) };
         let mut dirs = Vec::new();
         for v in list.iter() {
@@ -200,14 +264,20 @@ fn register(e: &mut Engine, w: &Shared) {
                 _ => return Err(abort("follow-path: invalid direction in list")),
             }
         }
-        with(&s, |w| w.follow_path(&dirs)).map(|r| {
-            sym(match r {
-                FollowResult::Arrived => "arrived",
-                FollowResult::Blocked => "blocked",
-                FollowResult::BattleWon => "battle-won",
-                FollowResult::PartyWiped => "party-wiped",
+        w.follow_path(&dirs)
+            .map(|r| {
+                sym(match r {
+                    FollowResult::Arrived => "arrived",
+                    FollowResult::Blocked => "blocked",
+                    FollowResult::BattleWon => "battle-won",
+                    FollowResult::BattleFled => "battle-fled",
+                    FollowResult::PartyWiped => "party-wiped",
+                })
             })
-        })
+            .map_err(|_| {
+                (s.interrupt)();
+                abort("game halted")
+            })
     });
     let s = w.clone();
     e.register_fn("entrance-pos", move || -> Val { with(&s, |w| Ok(pos_val(w.entrance_pos()))) });
@@ -220,19 +290,24 @@ pub fn run_script(dungeon: &Dungeon, script: &str) -> RunResult {
 
 /// 同じ（ダンジョン, `config.game_seed`, スクリプト）なら結果は完全に再現される。
 pub fn run_script_with(dungeon: &Dungeon, script: &str, config: &RunConfig) -> RunResult {
-    let world: Shared = Arc::new(Mutex::new(World::new(dungeon, config.game_seed, config.turn_limit)));
     let mut engine = Engine::new();
-    register(&mut engine, &world);
+    let controller = engine.get_thread_state_controller();
+    let c_for_host = controller.clone();
+    let ctx: Shared = Arc::new(HostCtx {
+        world: Mutex::new(World::new(dungeon, config.game_seed, config.turn_limit)),
+        interrupt: Box::new(move || c_for_host.interrupt()),
+    });
+    register(&mut engine, &ctx);
 
     // ホスト関数を呼ばない無限ループは World 側では検知できないので、
     // 監視スレッドが時間切れで VM を割り込む。
-    let controller = engine.get_thread_state_controller();
     let timed_out = Arc::new(AtomicBool::new(false));
+    let time_limit = config.time_limit;
     let (done_tx, done_rx) = mpsc::channel::<()>();
     let watchdog = {
         let timed_out = timed_out.clone();
         std::thread::spawn(move || {
-            if done_rx.recv_timeout(SCRIPT_TIME_LIMIT).is_err_and(|e| e == mpsc::RecvTimeoutError::Timeout) {
+            if done_rx.recv_timeout(time_limit).is_err_and(|e| e == mpsc::RecvTimeoutError::Timeout) {
                 timed_out.store(true, Ordering::SeqCst);
                 controller.interrupt();
             }
@@ -244,7 +319,7 @@ pub fn run_script_with(dungeon: &Dungeon, script: &str, config: &RunConfig) -> R
     drop(done_tx);
     let _ = watchdog.join();
 
-    let mut w = world.lock().expect("world lock");
+    let mut w = ctx.world.lock().expect("world lock");
     let outcome = match (w.status.clone(), run) {
         (Some(outcome), _) => outcome,
         (None, Err(_)) if timed_out.load(Ordering::SeqCst) => {

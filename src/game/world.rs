@@ -24,6 +24,7 @@ pub enum MoveResult {
     Moved,
     Blocked,
     BattleWon,
+    BattleFled,
     PartyWiped,
 }
 
@@ -31,6 +32,7 @@ pub enum MoveResult {
 pub enum RestResult {
     Rested,
     BattleWon,
+    BattleFled,
     PartyWiped,
 }
 
@@ -39,6 +41,7 @@ pub enum FollowResult {
     Arrived,
     Blocked,
     BattleWon,
+    BattleFled,
     PartyWiped,
 }
 
@@ -100,12 +103,12 @@ impl World {
 
     /// すべてのホスト関数の入口。終了済みなら中断し、呼び出し回数を数える。
     pub fn guard(&mut self) -> Result<(), Halt> {
-        if self.status.is_some() {
-            return Err(Halt);
-        }
         self.host_calls += 1;
         if self.host_calls > MAX_HOST_CALLS {
             return Err(self.halt(Outcome::ScriptError("too many host calls".into())));
+        }
+        if self.status.is_some() {
+            return Err(Halt);
         }
         Ok(())
     }
@@ -115,7 +118,7 @@ impl World {
         if self.status.is_some() {
             return Err(Halt);
         }
-        if self.party.turn + cost > self.turn_limit {
+        if self.party.turn.saturating_add(cost) > self.turn_limit {
             return Err(self.halt(Outcome::TurnLimit));
         }
         self.party.turn += cost;
@@ -190,8 +193,9 @@ impl World {
         let pct = self.encounter_percent(&MOVE_ENCOUNTER_PERCENT);
         Ok(match self.maybe_battle(pct) {
             Some(BattleEnd::Won) => MoveResult::BattleWon,
+            Some(BattleEnd::Fled) => MoveResult::BattleFled,
             Some(BattleEnd::Wiped) => MoveResult::PartyWiped,
-            Some(BattleEnd::Fled) | None => MoveResult::Moved,
+            None => MoveResult::Moved,
         })
     }
 
@@ -223,8 +227,9 @@ impl World {
         let pct = self.encounter_percent(&REST_ENCOUNTER_PERCENT);
         Ok(match self.maybe_battle(pct) {
             Some(BattleEnd::Won) => RestResult::BattleWon,
+            Some(BattleEnd::Fled) => RestResult::BattleFled,
             Some(BattleEnd::Wiped) => RestResult::PartyWiped,
-            Some(BattleEnd::Fled) | None => RestResult::Rested,
+            None => RestResult::Rested,
         })
     }
 
@@ -259,6 +264,21 @@ impl World {
 
     pub fn item_here(&self) -> Option<ItemKind> {
         self.floor_items[self.party.floor - 1].iter().find(|i| i.pos == self.party.pos).map(|i| i.kind)
+    }
+
+    /// 既知のセル `p` にあるアイテムを返す（未知のセルは `None`）。
+    pub fn known_item_at(&self, p: Pos) -> Option<ItemKind> {
+        self.known_tile(p)?;
+        self.floor_items[self.party.floor - 1].iter().find(|i| i.pos == p).map(|i| i.kind)
+    }
+
+    /// 現在の階で既知のセル上にあるアイテム一覧。
+    pub fn known_items(&self) -> Vec<ItemPlacement> {
+        self.floor_items[self.party.floor - 1]
+            .iter()
+            .copied()
+            .filter(|i| self.known_tile(i.pos).is_some())
+            .collect()
     }
 
     /// 失敗（足元に何もない）でもターンは消費する。
@@ -325,7 +345,7 @@ impl World {
     }
 
     /// 方向リストに沿って向き直りと移動を繰り返す。
-    /// 壁・戦闘（勝利/全滅）があればその時点で打ち切って理由を返す。
+    /// 壁・戦闘（勝利/逃走/全滅）があればその時点で打ち切って理由を返す。
     pub fn follow_path(&mut self, path: &[Dir]) -> Result<FollowResult, Halt> {
         for &dir in path {
             match self.party.facing.clockwise_steps_to(dir) {
@@ -341,6 +361,7 @@ impl World {
                 MoveResult::Moved => {}
                 MoveResult::Blocked => return Ok(FollowResult::Blocked),
                 MoveResult::BattleWon => return Ok(FollowResult::BattleWon),
+                MoveResult::BattleFled => return Ok(FollowResult::BattleFled),
                 MoveResult::PartyWiped => return Ok(FollowResult::PartyWiped),
             }
         }

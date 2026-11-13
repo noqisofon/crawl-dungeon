@@ -59,13 +59,24 @@ fn info_primitives_from_scheme() {
          (assert! (equal? (has-item? 'magic-book) #f))
          (assert! (= (alive-count) 6))
          (assert! (= (party-hp-ratio) 1.0))
+         (assert! (= (party-alive-hp-ratio) 1.0))
          (assert! (equal? (member-class 0) 'fighter))
          (assert! (equal? (member-class 3) 'thief))
          (assert! (equal? (member-class 4) 'mage))
          (assert! (equal? (member-class 5) 'priest))
          (assert! (> (member-hp 0) 0))
+         (assert! (= (member-hp 0) (member-max-hp 0)))
+         (assert! (= (member-mp 0) 0))
+         (assert! (= (member-max-mp 0) 0))
+         (assert! (> (member-mp 4) 0))
+         (assert! (= (member-mp 4) (member-max-mp 4)))
          (assert! (equal? (member-hp 99) #f))
+         (assert! (equal? (member-max-hp 99) #f))
+         (assert! (equal? (member-mp 99) #f))
+         (assert! (equal? (member-max-mp 99) #f))
          (assert! (equal? (known-tile 0 0) 'unknown))
+         (assert! (equal? (known-item-at 0 0) #f))
+         (assert! (equal? (known-items) '()))
          (exit-dungeon)",
     );
     // 情報取得はターンを消費しない。exit-dungeon の 1 ターンだけ。
@@ -271,17 +282,21 @@ fn entering_a_room_reveals_the_whole_room() {
 }
 
 #[test]
-fn sight_stops_at_walls() {
+fn sight_stops_at_walls_and_doors() {
     let d = dungeon();
     let w = world(&d);
     let f = &d.floors[0];
     for dir in Dir::ALL {
         let mut p = dir.step(w.party.pos);
-        let mut hit_wall = false;
-        while f.in_bounds(p) && !hit_wall {
+        let mut blocked = false;
+        while f.in_bounds(p) && !blocked {
             assert!(w.known_tile(p).is_some(), "{p:?} along {dir:?}");
-            hit_wall = f.tile(p) == Some(Tile::Wall);
+            blocked = matches!(f.tile(p), Some(Tile::Wall | Tile::Door));
             p = dir.step(p);
+        }
+        // 壁や扉のすぐ向こう側（部屋外）は見えない。
+        if f.in_bounds(p) {
+            assert_eq!(w.known_tile(p), None, "sight leaked past wall/door at {p:?}");
         }
     }
 }
@@ -494,8 +509,8 @@ fn weak_party_is_wiped_or_flees() {
 #[test]
 fn thieves_help_fleeing() {
     // 盗賊がいる方が逃走率が高い（設定値の関係で確認）。
-    assert!(FLEE_BASE_PERCENT + FLEE_THIEF_BONUS_PERCENT <= FLEE_MAX_PERCENT);
-    assert!(FLEE_THIEF_BONUS_PERCENT > 0);
+    const { assert!(FLEE_BASE_PERCENT + FLEE_THIEF_BONUS_PERCENT <= FLEE_MAX_PERCENT) };
+    const { assert!(FLEE_THIEF_BONUS_PERCENT > 0) };
 }
 
 #[test]
@@ -516,8 +531,85 @@ fn huge_coordinates_are_not_truncated() {
 #[test]
 fn infinite_loop_without_host_calls_times_out() {
     let d = dungeon();
+    let limit = std::time::Duration::from_millis(100);
+    let cfg = RunConfig { time_limit: limit, ..Default::default() };
     let start = std::time::Instant::now();
-    let r = run(&d, "(let loop () (loop))");
-    assert!(start.elapsed() < SCRIPT_TIME_LIMIT * 3, "took {:?}", start.elapsed());
+    let r = run_script_with(&d, "(let loop () (loop))", &cfg);
+    assert!(start.elapsed() < std::time::Duration::from_secs(3), "took {:?}", start.elapsed());
     assert!(matches!(r.outcome, Outcome::ScriptError(ref m) if m.contains("timed out")), "{:?}", r.outcome);
+}
+
+#[test]
+fn alive_hp_ratio_ignores_fallen_members() {
+    let d = dungeon();
+    let mut w = world(&d);
+    w.party.members[0].hp = 0;
+    assert!(w.party.hp_ratio() < 1.0);
+    assert_eq!(w.party.alive_hp_ratio(), 1.0);
+}
+
+#[test]
+fn known_items_only_reveal_when_cell_is_known() {
+    let d = dungeon();
+    let mut w = world(&d);
+    let book = d.floors[FLOOR_COUNT - 1].items[0];
+    w.party.floor = FLOOR_COUNT;
+    w.party.pos = d.floors[FLOOR_COUNT - 1].stairs_up;
+    // B5F の上り階段は Start 部屋にあり、魔導書は最も遠い Goal 部屋にあるので最初は未知。
+    assert!(w.known_items().is_empty());
+    assert_eq!(w.known_item_at(book.pos), None);
+
+    // 魔導書の隣から魔導書のあるセルへ1歩入ると、部屋全体が既知になり known_items で見える。
+    let neighbor = Dir::ALL
+        .into_iter()
+        .find(|&dir| d.floors[FLOOR_COUNT - 1].is_walkable(dir.step(book.pos)))
+        .unwrap();
+    w.party.pos = neighbor.step(book.pos);
+    w.party.facing = Dir::between(w.party.pos, book.pos).unwrap();
+    let _ = w.do_move().unwrap();
+    assert_eq!(w.known_items(), vec![book]);
+    assert_eq!(w.known_item_at(book.pos), Some(ItemKind::MagicBook));
+}
+
+#[test]
+fn follow_path_stops_when_battle_fled() {
+    let d = dungeon();
+    let mut fled = false;
+    for seed in 0..100u64 {
+        let mut w = World::new(&d, seed, DEFAULT_TURN_LIMIT);
+        // 盗賊1人だけを瀕死で残し、戦闘が起きたら高確率で逃走するようにする。
+        for m in &mut w.party.members {
+            m.hp = 0;
+            m.mp = 0;
+        }
+        w.party.members[3].hp = 30;
+        face(&mut w, true);
+        let dir = w.party.facing;
+        let back = dir.turn_right().turn_right();
+        let path: Vec<Dir> = (0..20).map(|i| if i % 2 == 0 { dir } else { back }).collect();
+        if let Ok(FollowResult::BattleFled) = w.follow_path(&path) {
+            fled = true;
+            break;
+        }
+    }
+    assert!(fled, "expected at least one seed to flee during follow_path");
+}
+
+#[test]
+fn exception_handler_cannot_bypass_halt() {
+    let d = dungeon();
+    let cfg = RunConfig { turn_limit: 5, time_limit: std::time::Duration::from_secs(2), ..Default::default() };
+    let start = std::time::Instant::now();
+    let r = run_script_with(
+        &d,
+        "(define (spin)
+           (with-handler (lambda (e) (spin))
+             (turn-left)
+             (spin)))
+         (spin)",
+        &cfg,
+    );
+    assert!(start.elapsed() < std::time::Duration::from_secs(1), "took {:?}", start.elapsed());
+    assert_eq!(r.outcome, Outcome::TurnLimit);
+    assert_eq!(r.turns, 5);
 }

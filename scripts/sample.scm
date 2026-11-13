@@ -11,22 +11,13 @@
 (define (px p) (list-ref p 0))
 (define (py p) (list-ref p 1))
 
-;; 休んでも回復しなかったときの HP 割合。(party-hp-ratio) は倒れた仲間の
-;; 最大 HP も分母に含み、倒れた仲間は復活しないので、割合が閾値まで戻らない。
-;; そのため、これ以上は休まない（無駄に休み続けるのを防ぐ）。
-(define rest-cap 1.0)
-
-;; 休みすぎないよう最大 4 回まで。
+;; 生存メンバーの HP 割合が REST-BELOW を下回ったら REST-UNTIL まで休む（最大 4 回）。
 (define (rest-if-hurt)
-  (when (and (< (party-hp-ratio) REST-BELOW)
-             (< (party-hp-ratio) (- rest-cap 0.001)))
+  (when (< (party-alive-hp-ratio) REST-BELOW)
     (let loop ([i 0])
-      (let ([before (party-hp-ratio)])
-        (when (and (< i 4) (< before REST-UNTIL))
-          (rest)
-          (if (> (party-hp-ratio) before)
-              (loop (+ i 1))
-              (set! rest-cap (min rest-cap before))))))))
+      (when (and (< i 4) (< (party-alive-hp-ratio) REST-UNTIL))
+        (rest)
+        (loop (+ i 1))))))
 
 (define (pickup-if-any)
   (when (item-here) (pickup)))
@@ -73,31 +64,15 @@
                 (begin (go-to (px f) (py f)) (pickup-if-any) (loop))
                 #f))))))
 
-;; 歩行可能で未訪問の既知セル（B5F で床の魔導書を探すのに使う）。
-(define (unvisited-cells)
-  (let yloop ([y 0] [acc '()])
-    (if (>= y 40)
-        acc
-        (yloop (+ y 1)
-               (let xloop ([x 0] [acc acc])
-                 (if (>= x 40)
-                     acc
-                     (xloop (+ x 1)
-                            (if (and (member (known-tile x y) '(floor door))
-                                     (not (visited? x y)))
-                                (cons (list x y) acc)
-                                acc))))))))
-
-;; B5F: frontier を尽くし、それでも見つからなければ未訪問セルを順に踏む。
+;; B5F: frontier を巡り、まだ拾えていなければ既知セル上の魔導書の位置へ直行する。
 (define (find-book)
   (explore-until (lambda () (has-item? 'magic-book)))
-  (let loop ([cells (unvisited-cells)])
-    (unless (has-item? 'magic-book)
-      (let ([c (nearest (filter (lambda (p) (not (visited? (px p) (py p)))) cells))])
-        (when c
-          (go-to (px c) (py c))
-          (pickup-if-any)
-          (loop cells))))))
+  (unless (has-item? 'magic-book)
+    (let ([items (known-items)])
+      (when (pair? items)
+        (let ([b (car items)])
+          (go-to (px b) (py b))
+          (pickup-if-any))))))
 
 (define (dive)
   (set! arrival-stack (cons (position) arrival-stack))
