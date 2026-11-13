@@ -4,6 +4,8 @@
 //! （勝利・全滅・ターン上限など）すると `World.status` に理由が入り、以降の
 //! ホスト関数呼び出しは `Err` を返してスクリプトを中断する。
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use steel::rerrs::{ErrorKind, SteelErr};
@@ -13,7 +15,7 @@ use steel::steel_vm::register_fn::RegisterFn;
 
 use crate::dungeon::{Dungeon, ItemKind, Pos, Tile};
 
-use super::consts::DEFAULT_TURN_LIMIT;
+use super::consts::{DEFAULT_TURN_LIMIT, SCRIPT_TIME_LIMIT};
 use super::event::{Outcome, RunResult};
 use super::types::Dir;
 use super::world::{FollowResult, MoveResult, RestResult, World};
@@ -222,11 +224,32 @@ pub fn run_script_with(dungeon: &Dungeon, script: &str, config: &RunConfig) -> R
     let mut engine = Engine::new();
     register(&mut engine, &world);
 
+    // ホスト関数を呼ばない無限ループは World 側では検知できないので、
+    // 監視スレッドが時間切れで VM を割り込む。
+    let controller = engine.get_thread_state_controller();
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let watchdog = {
+        let timed_out = timed_out.clone();
+        std::thread::spawn(move || {
+            if done_rx.recv_timeout(SCRIPT_TIME_LIMIT).is_err_and(|e| e == mpsc::RecvTimeoutError::Timeout) {
+                timed_out.store(true, Ordering::SeqCst);
+                controller.interrupt();
+            }
+        })
+    };
+
     let run = engine.compile_and_run_raw_program(script.to_string());
+
+    drop(done_tx);
+    let _ = watchdog.join();
 
     let mut w = world.lock().expect("world lock");
     let outcome = match (w.status.clone(), run) {
         (Some(outcome), _) => outcome,
+        (None, Err(_)) if timed_out.load(Ordering::SeqCst) => {
+            Outcome::ScriptError("script timed out".into())
+        }
         (None, Err(e)) => Outcome::ScriptError(e.to_string()),
         (None, Ok(_)) => Outcome::ScriptError("script ended without exiting the dungeon".into()),
     };
