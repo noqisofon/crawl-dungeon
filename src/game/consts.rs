@@ -9,6 +9,9 @@ pub const MAX_IDLE_ACTIONS: u32 = 1000;
 /// ホスト関数の総呼び出し回数の上限。無限ループ対策。
 pub const MAX_HOST_CALLS: u64 = 5_000_000;
 
+/// スクリプト実行の実時間の上限。ホスト関数を呼ばない無限ループ対策。
+pub const SCRIPT_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 // ---- ターンコスト ----
 pub const MOVE_COST: u32 = 1;
 pub const TURN_COST: u32 = 1;

@@ -512,3 +512,12 @@ fn huge_coordinates_are_not_truncated() {
     );
     assert_eq!(r.outcome, Outcome::Exited(ExitKind::NoBook), "{r:?}");
 }
+
+#[test]
+fn infinite_loop_without_host_calls_times_out() {
+    let d = dungeon();
+    let start = std::time::Instant::now();
+    let r = run(&d, "(let loop () (loop))");
+    assert!(start.elapsed() < SCRIPT_TIME_LIMIT * 3, "took {:?}", start.elapsed());
+    assert!(matches!(r.outcome, Outcome::ScriptError(ref m) if m.contains("timed out")), "{:?}", r.outcome);
+}
