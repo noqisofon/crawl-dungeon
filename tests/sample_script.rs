@@ -52,3 +52,22 @@ fn party_wipe_ends_the_run() {
     // 全滅した戦闘が最後のイベント（以降は行動できない）。
     assert!(matches!(r.events.last(), Some(GameEvent::BattleResult { result: BattleEnd::Wiped, .. })));
 }
+
+#[test]
+fn battle_and_rest_events_carry_the_party_state() {
+    use crawl_dungeon::game::consts::{INITIAL_PARTY, class_stats};
+    let mut seen = 0;
+    for seed in 0..10u64 {
+        for e in run_seed(seed).events {
+            if let GameEvent::BattleResult { party, .. } | GameEvent::Rested { party, .. } = e {
+                seen += 1;
+                assert_eq!(party.len(), INITIAL_PARTY.len());
+                for (s, &(_, class)) in party.iter().zip(INITIAL_PARTY.iter()) {
+                    let (max_hp, max_mp) = class_stats(class);
+                    assert!((0..=max_hp).contains(&s.hp) && (0..=max_mp).contains(&s.mp));
+                }
+            }
+        }
+    }
+    assert!(seen > 0);
+}
